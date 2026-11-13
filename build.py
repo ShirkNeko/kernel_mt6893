@@ -65,7 +65,7 @@ env["LD"] = "ld.lld"
 # 2. 彻底恢复并清理源码树
 # ============================================================
 print("==> 恢复并清理源码树...")
-run_cmd(["git", "checkout", "--", "."], env=env, check=False)
+run_cmd(["git", "checkout", "--", ".", ":(exclude)build.py"], env=env, check=False)
 
 paths_to_remove = [
     ".config", 
@@ -144,9 +144,54 @@ with open(DEFCONFIG_PATH, "r") as f:
     defconfig = f.read()
 if not defconfig.endswith("\n"): defconfig += "\n"
 
-for key in ["CONFIG_KSU", "CONFIG_KPM", "CONFIG_KSU_TAMPER_SYSCALL_TABLE"]:
+for key in ["CONFIG_KSU", "CONFIG_KPM", "CONFIG_KSU_SUSFS", "CONFIG_KSU_TAMPER_SYSCALL_TABLE"]:
     defconfig = re.sub(rf"^{key}[= ].*$", "", defconfig, flags=re.MULTILINE)
-defconfig += "CONFIG_KSU=y\nCONFIG_KPM=y\nCONFIG_KSU_TAMPER_SYSCALL_TABLE=y\n"
+# 手动选择：KernelSU 后端（USE_SUSFS=0 切回 syscall-table tamper，二者互斥）
+_env_mode = os.environ.get("USE_SUSFS")
+if _env_mode is None:
+    if sys.stdin.isatty():
+        print("")
+        print("请选择 KernelSU 后端:")
+        print("  1) SUSFS inline hooks（默认）")
+        print("  2) syscall table tamper（不带 SUSFS，二者互斥）")
+        while True:
+            try:
+                _choice = input("请输入 1 或 2 [1]: ").strip()
+            except EOFError:
+                _choice = ""
+            if _choice in ("", "1", "2"):
+                break
+            print("无效输入，请输入 1 或 2。")
+        USE_SUSFS = (_choice != "2")
+    else:
+        USE_SUSFS = True
+else:
+    USE_SUSFS = _env_mode != "0"
+if USE_SUSFS:
+    KSU_OPTS = [
+        "CONFIG_KSU=y",
+        "CONFIG_KPM=y",
+        "CONFIG_KSU_SUSFS=y",
+        "CONFIG_KSU_SUSFS_INLINE_HOOK=y",
+        "CONFIG_KSU_SUSFS_SUS_PATH=y",
+        "CONFIG_KSU_SUSFS_SUS_MOUNT=y",
+        "CONFIG_KSU_SUSFS_SUS_KSTAT=y",
+        "CONFIG_KSU_SUSFS_SPOOF_UNAME=y",
+        "CONFIG_KSU_SUSFS_ENABLE_LOG=y",
+        "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y",
+        "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y",
+        "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y",
+        "CONFIG_KSU_SUSFS_SUS_MAP=y",
+        "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER=y",
+    ]
+else:
+    KSU_OPTS = [
+        "CONFIG_KSU=y",
+        "CONFIG_KPM=y",
+        "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y",
+    ]
+print("==> KSU backend: " + ("SUSFS inline hooks" if USE_SUSFS else "syscall table tamper"))
+defconfig += "\n".join(KSU_OPTS) + "\n"
 
 if "Droidspaces support (non-GKI)" not in defconfig:
     defconfig += """
